@@ -1,0 +1,77 @@
+{
+  "nombre": "Nicolás Real",
+  "titulo": "Técnico en Soporte IT | Programador",
+  "contacto": {
+    "email": "nicoreal99@gmail.com",
+    "telefono": "+54 11 3402-0542",
+    "ubicacion": "San Fernando, Buenos Aires, Argentina"
+  },
+  "experiencia": [
+    {
+      "puesto": "Soporte Técnico y Reparación de PCs",
+      "empresa": "Freelance",
+      "periodo": "2019 - Actualidad",
+      "descripcion": "Reparación de hardware, diagnóstico de fallas, instalación de sistemas operativos Windows/Linux, mantenimiento preventivo y soporte a domicilio."
+    },
+    {
+      "puesto": "Coordinador de Mozos y Logística de Eventos",
+      "empresa": "EAT S.A.",
+      "periodo": "2021 - Actualidad",
+      "descripcion": "Organización de personal en eventos, control de asistencia y soporte operativo en salones de gran escala."
+    },
+    {
+      "puesto": "Distribución y Logística",
+      "empresa": "Dipoint",
+      "periodo": "2018 - 2019",
+      "descripcion": "Tareas de depósito, armado de pedidos, control de stock y distribución de productos."
+    }
+  ],
+  "educacion": [
+    {
+      "titulo": "Tecnicatura Superior en Programación",
+      "institucion": "UTN FRGP",
+      "periodo": "2022 - 2024"
+    },
+    {
+      "titulo": "CBC y primer año de Ciencias de la Computación",
+      "institucion": "UBA",
+      "periodo": "2017 - 2018"
+    },
+    {
+      "titulo": "Cursos complementarios",
+      "institucion": "Varias",
+      "periodo": "2017 - 2021",
+      "descripcion": "Reparación de PC, instalaciones eléctricas domiciliarias, cursos de bases de datos y redes."
+    }
+  ],
+  "habilidades": [
+    "Soporte IT",
+    "Diagnóstico de hardware",
+    "Reparación de PCs",
+    "Instalación de sistemas operativos",
+    "Redes TCP/IP",
+    "SQL",
+    "Java",
+    "C++",
+    "C#",
+    "HTML",
+    "CSS",
+    "Trabajo en equipo"
+  ],
+  "preferencias": {
+    "modalidad": "sin preferencia",
+    "jornada": "sin preferencia",
+    "sueldo_bruto_mensual": "a convenir, idealmente arriba de 1.000.000 ARS",
+    "sueldo_neto_mensual": "1.000.000 ARS",
+    "fecha_inicio": "Inmediata",
+    "viajar": "Sí",
+    "movilidad": "Sí"
+  },
+  "otros": {
+    "secundario": "Completo",
+    "idiomas": {
+      "español": "Nativo",
+      "inglés": "Intermedio"
+    }
+  }
+}
