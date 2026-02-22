@@ -12,7 +12,10 @@ from selenium.webdriver.support.ui import WebDriverWait, Select
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.keys import Keys
+from selenium.webdriver.chrome.service import Service
+
 import os, time, random, re, unicodedata, json, requests
+from pathlib import Path
 from difflib import SequenceMatcher
 from urllib.parse import urljoin
 
@@ -30,10 +33,12 @@ OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434")
 BRAVE_PATH = r"C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe"
 
 SCRIPT_DIR = os.path.dirname(__file__)
-PROFILE_DIR = os.path.join(SCRIPT_DIR, "brave_profile_computrabajo")
-os.makedirs(PROFILE_DIR, exist_ok=True)
 
-PALABRAS = ["Soporte Técnico", "Programador", "Administrativo","unicenter", "IT", "sql", ".net", "Desarrollador","mozo" ,"Help Desk", "Técnico", "Tester", "QA"]
+# ✅ PERFIL CORREGIDO: fuera del proyecto / fuera de OneDrive, estable en Windows
+PROFILE_DIR = Path(os.environ["LOCALAPPDATA"]) / "CocoTech" / "selenium_profiles" / "computrabajo"
+PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+
+PALABRAS = ["Soporte Técnico","QA","c++","sql","programador",".NET" , "IT", "Helpdesk","Tecnico", "Desarrollador"]
 CIUDADES = ["buenos-aires", "capital-federal"]
 
 PAGINAS_MAX = 5
@@ -80,27 +85,49 @@ def load_cv_json(path=CV_JSON_PATH):
         print(f"⚠️ No pude cargar {path}: {e}")
         return {}
 
-# ==================== BROWSER ====================
+# ==================== BROWSER (CORREGIDO) ====================
 def make_chrome_options():
     opts = webdriver.ChromeOptions()
     opts.binary_location = BRAVE_PATH
+
     opts.add_argument("--start-maximized")
-    opts.add_argument(fr"--user-data-dir={PROFILE_DIR}")
+    opts.add_argument(f"--user-data-dir={str(PROFILE_DIR)}")
     opts.add_argument("--profile-directory=Default")
-    # estabilidad
+
+    # estabilidad base
     opts.add_argument("--disable-gpu")
     opts.add_argument("--no-sandbox")
     opts.add_argument("--disable-dev-shm-usage")
     opts.add_argument("--test-type")
     opts.add_argument("--no-first-run")
     opts.add_argument("--no-default-browser-check")
+
+    # ✅ estabilidad de red / evitar “ERR_NAME_NOT_RESOLVED” en sesiones automatizadas
+    opts.add_argument("--disable-features=UseDnsHttpsSvcb,UseDnsHttpsSvcbAlpn,EnableDnsOverHttps")
+    opts.add_argument("--disable-ipv6")
+    opts.add_argument("--no-proxy-server")
+    opts.add_argument("--proxy-server=direct://")
+    opts.add_argument("--proxy-bypass-list=*")
+
+    # opcional: reduce interferencias visuales
+    opts.add_argument("--disable-notifications")
     return opts
 
 def start_browser():
     options = make_chrome_options()
-    drv = webdriver.Chrome(options=options)
-    wait = WebDriverWait(drv, 12)
-    return drv, wait
+    try:
+        drv = webdriver.Chrome(options=options)  # Selenium Manager
+        wait = WebDriverWait(drv, 12)
+        return drv, wait
+    except Exception as e:
+        print(f"⚠️ Selenium Manager falló:\n{e}\n↪️ Intento fallback con chromedriver.exe local…")
+        local_driver = os.path.join(SCRIPT_DIR, "chromedriver.exe")
+        if not os.path.exists(local_driver):
+            raise RuntimeError("No se encontró chromedriver.exe para el fallback. Poné chromedriver.exe en la misma carpeta del script.") from e
+        service = Service(local_driver)
+        drv = webdriver.Chrome(service=service, options=options)
+        wait = WebDriverWait(drv, 12)
+        return drv, wait
 
 driver, wait = start_browser()
 CV = load_cv_json()
@@ -129,7 +156,10 @@ def _check_llm_ready() -> bool:
             ia_log("LLM_BACKEND no reconocido.")
             return False
     except Exception as e:
-        ia_log(f"LLM no disponible: {e}")
+        if "11434" in str(e):
+            ia_log(f"Ollama no detectado en el puerto 11434. Asegurate de que Ollama esté abierto.")
+        else:
+            ia_log(f"LLM no disponible: {e}")
         return False
 
 LLM_READY = _check_llm_ready()
@@ -157,6 +187,7 @@ def _has_generic(text: str) -> bool:
         if re.search(pat, lt):
             return True
     return len(lt) < 12
+
 def _topic_hint_from_question(q: str) -> str:
     ql = (q or "").lower()
     for k, hint in TOPIC_HINTS.items():
@@ -166,6 +197,43 @@ def _topic_hint_from_question(q: str) -> str:
         return "Responde sí/no con una razón concreta (herramienta, tarea o contexto)."
     return ""
 
+def _get_cv_summary(cv: dict) -> str:
+    """Genera un resumen detallado del CV para el LLM."""
+    contacto = cv.get("contacto", {})
+    pref = cv.get("preferencias", {})
+    otros = cv.get("otros", {})
+    # Soporte para vieja estructura (habilidades) y nueva (habilidades_tecnicas)
+    skills = cv.get("habilidades_tecnicas", cv.get("habilidades", []))
+    extra = cv.get("conocimientos_adicionales", [])
+    exp = cv.get("experiencia", [])
+    edu = cv.get("educacion", [])
+    idiomas = cv.get("idiomas", otros.get("idiomas", {}))
+
+    summary_parts = [
+        f"Nombre: {cv.get('nombre', 'Candidato')}",
+        f"Título: {cv.get('titulo', '')}",
+        f"Perfil: {cv.get('perfil_profesional', '')}",
+        f"Ubicación: {contacto.get('ubicacion', '')}",
+        f"Habilidades: {', '.join(skills[:15])}",
+        f"Extras: {', '.join(extra[:5])}",
+        f"Idiomas: {json.dumps(idiomas)}",
+        f"Estudios: {otros.get('secundario', 'Completo')}"
+    ]
+
+    if edu:
+        edu_summary = " | ".join([f"{e.get('titulo')} en {e.get('institucion')} ({e.get('periodo')}): {e.get('enfoque','')}" for e in edu[:2]])
+        summary_parts.append(f"Educación: {edu_summary}")
+
+    if exp:
+        exp_summary = " | ".join([f"{x.get('puesto')} en {x.get('empresa')} ({x.get('periodo')}): {x.get('descripcion')}" for x in exp[:2]])
+        summary_parts.append(f"Experiencia: {exp_summary}")
+
+    summary_parts.append(f"Disponibilidad: {pref.get('fecha_inicio', 'Inmediata')}")
+    summary_parts.append(f"Sueldo pretendido: {pref.get('sueldo_neto_mensual', 'A convenir')}")
+    summary_parts.append(f"Movilidad: {pref.get('movilidad', 'No')}, Viajar: {pref.get('viajar', 'No')}")
+
+    return "; ".join(summary_parts)
+
 # ==================== IA helpers (texto / opciones / números) ====================
 def _llm_answer_per_question(question_label: str, cv: dict) -> str | None:
     """
@@ -173,23 +241,15 @@ def _llm_answer_per_question(question_label: str, cv: dict) -> str | None:
     """
     try:
         q = (question_label or "").strip()
-        contacto = cv.get("contacto", {})
-        pref     = cv.get("preferencias", {})
-        otros    = cv.get("otros", {})
-        skills   = cv.get("habilidades", [])[:8]
-
         topic_hint = _topic_hint_from_question(q)
-        perfil = (
-            f"zona={contacto.get('ubicacion','')}; dispo={pref.get('fecha_inicio','')}; "
-            f"movilidad={pref.get('movilidad','')}; viajar={pref.get('viajar','')}; "
-            f"ingles={otros.get('idiomas',{}).get('inglés','')}; estudios={otros.get('secundario','')}; "
-            f"skills={', '.join(skills)}"
-        )
+        perfil = _get_cv_summary(cv)
 
         def call_llm(extra_rules: str) -> str | None:
             prompt = (
                 "Eres un candidato y respondes en español con UNA sola frase (máx 160 caracteres), "
                 "específica, profesional y veraz, enfocada en la PREGUNTA. "
+                "NO inventes datos que no estén en el PERFIL (ej: viajes específicos, empresas o tareas no listadas). "
+                "Si el PERFIL no tiene el detalle pedido, responde de forma profesional y honesta basada solo en lo que sí sabemos. "
                 "Prohibidas frases genéricas como 'estoy disponible', 'no tengo inconvenientes', "
                 "'puedo adaptarme', 'cuento con la experiencia requerida'. "
                 "Incluye un dato concreto (herramienta, alcance, nivel o ejemplo breve). "
@@ -227,16 +287,15 @@ def _llm_answer_per_question(question_label: str, cv: dict) -> str | None:
                 r = requests.post(f"{OPENAI_BASE_URL}/chat/completions", json=body, headers=headers, timeout=20)
                 r.raise_for_status()
                 out = (r.json()["choices"][0]["message"]["content"] or "").strip()
+
             out = out.strip(" '\"\n").replace("\n", " ")
             return out[:160] if out else None
 
-        # Primer intento (normal)
         ans = call_llm(extra_rules="Evita respuestas genéricas; aporta un dato concreto relevante.")
         if ans and not _has_generic(ans):
             ia_log(f"LLM texto ✓ '{ans}'")
             return ans
 
-        # Segundo intento (más estricto)
         ans2 = call_llm(extra_rules="Si la pregunta es sí/no, responde Sí/No + razón concreta (herramienta/ejemplo). Evita generalidades.")
         if ans2 and not _has_generic(ans2):
             ia_log(f"LLM texto (retry) ✓ '{ans2}'")
@@ -250,17 +309,12 @@ def _llm_answer_per_question(question_label: str, cv: dict) -> str | None:
 
 def _llm_answer_for_fallback(question_label: str, cv: dict):
     try:
-        # Mantengo para compatibilidad; igual le aplicamos filtro anti-genéricos en _compose_text_answer
         q = (question_label or "").strip()
-        contacto = cv.get("contacto", {})
-        pref     = cv.get("preferencias", {})
-        otros    = cv.get("otros", {})
-        skills   = cv.get("habilidades", [])[:6]
+        perfil = _get_cv_summary(cv)
         prompt = (
             "Una sola frase (máx 160 caracteres), específica y profesional, sin generalidades. "
             f"Pregunta: {q}\n"
-            f"Datos: zona={contacto.get('ubicacion','')}, dispo={pref.get('fecha_inicio','')}, movilidad={pref.get('movilidad','')}, "
-            f"viajar={pref.get('viajar','')}, inglés={otros.get('idiomas',{}).get('inglés','')}, estudios={otros.get('secundario','')}, skills={', '.join(skills)}.\n"
+            f"Datos del Candidato: {perfil}\n"
             "Solo la frase."
         )
         if not LLM_READY:
@@ -294,12 +348,29 @@ def _similar(a: str, b: str) -> float:
 
 def _best_match_idx(prediction: str, options: list[str]) -> int:
     if not prediction or not options: return -1
+    norm_pred = _norm(prediction)
+    # 1. Exact or very similar match
     scores = [(i, _similar(prediction, opt)) for i, opt in enumerate(options)]
     scores.sort(key=lambda x: x[1], reverse=True)
+    if scores and scores[0][1] >= 0.8: return scores[0][0]
+
+    # 2. Substring match (e.g., "Si" matches "Si, cuento con experiencia")
+    for i, opt in enumerate(options):
+        norm_opt = _norm(opt)
+        if norm_pred in norm_opt or norm_opt in norm_pred:
+            return i
+
+    # 3. Fallback to similar if nothing else found
     return scores[0][0] if scores and scores[0][1] >= 0.5 else -1
 
 def _extract_positive_idx(options: list[str]) -> int:
-    POS = ["si", "sí", "accept", "acepto", "dispon", "inmed", "full", "sr", "ssr", "biling", "avanz", "complet", "de acuerdo"]
+    POS = ["si", "sí", "accept", "acepto", "dispon", "inmed", "full", "sr", "ssr", "biling", "avanz", "complet", "de acuerdo", "cuento con"]
+    # Priorizamos "si" exacto o "cuento con"
+    for i, opt in enumerate(options):
+        n = _norm(opt)
+        if n in ["si", "sí"]: return i
+        if "cuento con" in n: return i
+
     for i, opt in enumerate(options):
         if any(p in _norm(opt) for p in POS): return i
     return 0 if options else -1
@@ -436,15 +507,29 @@ def _closest_label_text(el) -> str:
             "ancestor::div[contains(@class,'field_')][1]//label[1]",
             "ancestor::div[contains(@class,'group')][1]//label[1]",
             "ancestor::fieldset[1]//legend[1]",
-            "preceding::label[1]"
+            "preceding::label[1]",
+            "preceding-sibling::h1[1]", "preceding-sibling::h2[1]", "preceding-sibling::h3[1]",
+            "preceding-sibling::p[1]", "preceding-sibling::b[1]", "preceding-sibling::strong[1]",
+            "preceding-sibling::div[contains(@class,'question')][1]",
+            "parent::div/preceding-sibling::*[1]"
         ]:
             try:
                 lab = el.find_element(By.XPATH, xp)
                 t = (lab.text or "").strip()
-                if t: return t
+                if t and len(t) > 3: return t
             except: pass
     except:
         pass
+
+    # Fallback: buscar texto en el contenedor padre que parezca una pregunta
+    try:
+        parent = el.find_element(By.XPATH, "parent::*")
+        p_text = (parent.text or "").split("\n")[0].strip()
+        if p_text and len(p_text) > 3:
+            return p_text
+    except:
+        pass
+
     return ""
 
 def _click_input_or_label(input_el) -> bool:
@@ -638,10 +723,8 @@ def _close_common_overlays():
 
 def _find_submit_buttons():
     xpaths = [
-        # específicos CT candidato
         "//input[@id='btnKiller' and @type='submit']",
         "//input[@type='submit' and contains(@value,'Enviar mi CV')]",
-        # genéricos
         "//*[self::button or self::a or @role='button'][contains(normalize-space(.), 'Postularme')]",
         "//*[self::button or self::a or @role='button'][contains(normalize-space(.), 'Postular')]",
         "//*[self::button or self::a or @role='button'][contains(normalize-space(.), 'Aplicar')]",
@@ -737,28 +820,54 @@ def _wait_modal_close_or_feedback(timeout=8) -> bool:
 
 # ==================== Texto: SOLO IA (con anti-genéricos) ====================
 def _compose_text_answer(question_label: str, cv: dict) -> str:
-    # IA principal
+    ql = (question_label or "").lower()
     ans = _llm_answer_per_question(question_label, cv)
     if ans:
         ia_log("Usando IA en _compose_text_answer")
         return ans
-    # IA fallback
     if USE_LLM_FALLBACK:
         ans2 = _llm_answer_for_fallback(question_label, cv)
         if ans2 and not _has_generic(ans2):
             ia_log("Usando IA fallback en _compose_text_answer")
             return ans2
-    # Estricto: no heurísticas
+
+    # --- HEURÍSTICAS DE APOYO (si la IA falla o está apagada) ---
     if STRICT_IA_ONLY:
         ia_log("IA no disponible → respuesta vacía por STRICT_IA_ONLY")
         return ""
+
+    ia_log(f"IA no disponible/falló → Usando heurísticas para: '{ql[:30]}...'")
+    pref = cv.get("preferencias", {})
+    contacto = cv.get("contacto", {})
+
+    if any(k in ql for k in ["salario", "sueldo", "remuneracion", "pretendido", "pretension"]):
+        return pref.get("sueldo_neto_mensual", "A convenir")
+    if any(k in ql for k in ["residencia", "donde vive", "donde vivis", "zona", "localidad", "residis"]):
+        return contacto.get("ubicacion", "San Fernando, Buenos Aires")
+    if any(k in ql for k in ["secundario", "estudios"]):
+        return cv.get("otros", {}).get("secundario", "Completo")
+    if any(k in ql for k in ["disponibilidad", "fecha", "cuando", "incorporacion"]):
+        return pref.get("fecha_inicio", "Inmediata")
+    if any(k in ql for k in ["conducir", "registro", "licencia", "auto", "vehiculo"]):
+        return pref.get("movilidad", "No disponible")
+    if any(k in ql for k in ["viajar", "interior", "exterior", "viaje"]):
+        return pref.get("viajar", "No disponible")
+    if any(k in ql for k in ["conocimiento", "herramienta", "manejo", "tecnologia", "habilidad", "skills"]):
+        skills = cv.get("habilidades_tecnicas", cv.get("habilidades", []))
+        return f"Conocimientos en {', '.join(skills[:5])}." if skills else "Experiencia en IT."
+    if any(k in ql for k in ["experiencia", "contanos", "puesto", "trabajo", "actualmente", "perfil"]):
+        prof = cv.get("perfil_profesional", "")
+        if prof: return prof[:160]
+        exps = cv.get("experiencia", [])
+        if exps: return f"{exps[0]['puesto']} en {exps[0]['empresa']}."
+        return "Experiencia en Soporte Técnico."
+
     return ""
 
 # ==================== Completar preguntas (modal o embebidas) y enviar ====================
 def fill_questions_anywhere_and_submit(cv: dict) -> bool:
     ok_algo = False
 
-    # 1) Detectar modo
     modal_mode = is_selection_modal_open(timeout=0.8)
     if modal_mode:
         containers = []
@@ -775,7 +884,6 @@ def fill_questions_anywhere_and_submit(cv: dict) -> bool:
             containers += driver.find_elements(By.CSS_SELECTOR, sel)
         containers = [c for c in containers if c.is_displayed()]
 
-    # 2) Por contenedor: radios, checks, selects, inputs numéricos, textareas e inputs
     for cont in containers:
         try:
             label_ctx = ""
@@ -823,7 +931,6 @@ def fill_questions_anywhere_and_submit(cv: dict) -> bool:
                         ia_log(f"input-text ← '{(ans[:50] + '…') if len(ans)>50 else ans}' (label='{qtxt[:40]}')")
             except: pass
 
-    # 3) Pasada GLOBAL: por si quedaron textareas sueltos
     for ta in driver.find_elements(By.TAG_NAME, "textarea"):
         try:
             if ta.is_displayed() and (ta.get_attribute("value") or "").strip() == "":
@@ -834,7 +941,17 @@ def fill_questions_anywhere_and_submit(cv: dict) -> bool:
                     ia_log(f"textarea(global) ← '{(ans[:50] + '…') if len(ans)>50 else ans}' (label='{qtxt[:40]}')")
         except: pass
 
-    # 4) Enviar (botón robusto)
+    # Global text inputs check
+    for inp in driver.find_elements(By.CSS_SELECTOR, "input[type='text'],input[type='email']"):
+        try:
+            if inp.is_displayed() and (inp.get_attribute("value") or "").strip() == "":
+                qtxt = _closest_label_text(inp)
+                ans = _compose_text_answer(qtxt, cv)
+                if ans != "":
+                    inp.clear(); inp.send_keys(ans); ok_algo = True
+                    ia_log(f"input-text(global) ← '{(ans[:50] + '…') if len(ans)>50 else ans}' (label='{qtxt[:40]}')")
+        except: pass
+
     sent = _button_submit_with_retries(max_attempts=4)
     if sent:
         _wait_modal_close_or_feedback(timeout=8)
@@ -858,7 +975,6 @@ def _next_button_elements():
     return [b for b in btns if b.is_displayed() and (b.get_attribute("href") or "").strip()]
 
 def _scroll_until_next_and_collect(max_items: int = 20):
-    # Scroll hasta ver “Siguiente” estabilizado
     same_rounds, last_count, safety = 0, -1, 0
     while True:
         safety += 1
@@ -871,7 +987,6 @@ def _scroll_until_next_and_collect(max_items: int = 20):
         driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
         human_sleep(0.5, 0.9)
 
-    # Recolectar hasta 20 links al DETALLE
     detail_links, seen = [], set()
     arts = driver.find_elements(By.CSS_SELECTOR, "article[data-offers-grid-offer-item-container], article.box_offer")
     for art in arts:
@@ -943,7 +1058,6 @@ def try_detail_apply_from_url(detail_url: str) -> bool:
     driver.get(detail_url)
     human_sleep(1.0, 1.6)
 
-    # 1) Intentar encontrar y clickear "Postularme"/"Postular"/"Aplicar"/"Enviar"
     clicked = False
     try:
         cand = _find_submit_buttons()
@@ -963,12 +1077,10 @@ def try_detail_apply_from_url(detail_url: str) -> bool:
     except:
         pass
 
-    # 2) Con o sin click previo, completar preguntas (modal o embebidas) y enviar
     ok = fill_questions_anywhere_and_submit(CV)
     if ok:
         return True
 
-    # 3) Si no había preguntas ni envío, considerar que el click ya postuló
     return clicked and not is_selection_modal_open(timeout=0.5)
 
 # ==================== Paginado según el flujo acordado ====================
@@ -992,7 +1104,7 @@ def procesar_listado(keyword: str, city_slug: str, paginas_max: int, max_kw: int
             ok = False
             if "#" in link:
                 ok = try_inline_apply_on_hash(link)
-                if not ok:  # fallback al detalle directo
+                if not ok:
                     base = link.split("#")[0]
                     ok = try_detail_apply_from_url(base)
             else:
@@ -1005,7 +1117,6 @@ def procesar_listado(keyword: str, city_slug: str, paginas_max: int, max_kw: int
             else:
                 print(f"     #{idx:02d} FAIL — {link}")
 
-            # volver al listado y asegurar
             try:
                 driver.back(); human_sleep(0.8, 1.2)
                 if "/ofertas-trabajo/" in (driver.current_url or "") or driver.current_url == link:
@@ -1046,6 +1157,12 @@ def main():
             print(f"   → Postuladas en '{kw}' / {city}: {hechas}")
 
     print(f"\n🎉 Listo. Postulaciones realizadas: {total_ref[0]}")
+
+    if KEEP_OPEN_AFTER_RUN:
+        print("\n🔒 Dejo Brave abierto. Presioná Enter acá para cerrar…")
+        try: input()
+        except KeyboardInterrupt: pass
+
     try: driver.quit()
     except: pass
 
